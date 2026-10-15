@@ -165,8 +165,8 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID, uint3 groupThreadId : 
     CbrSample self = MapPixelToSample(pixelCoord, frameParity);
     bool isCurrentSampleActive = self.isActive;
     float3 currentColor = float3(0.0f, 0.0f, 0.0f); // valid only for active pixels
-    float currentDepth;                              // raw device depth (written to the history depth target)
-    float currentLinear;                             // linear depth used by the occlusion test
+    float currentDepth = 0.0f;                              // raw device depth (written to the history depth target)
+    float currentLinear = 0.0f;                             // linear depth used by the occlusion test
 
     // The 4 cardinal neighbours of a reconstructed pixel are always natively shaded (mirrored at borders).
     int2 cardinalCoord[4] = { int2(0, 0), int2(0, 0), int2(0, 0), int2(0, 0) };
@@ -180,18 +180,32 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID, uint3 groupThreadId : 
         // No native sample here: estimate depth from the cardinal neighbours (Intel "CSO": average LINEAR depth).
         float sumRaw = 0.0f;
         float sumLin = 0.0f;
+        float validCount = 0.0f;
         for (int i = 0; i < 4; ++i) {
             int2 c = pixelCoord + kCardinal[i];
             if (!InBounds(c, targetSize)) {
                 c = pixelCoord - kCardinal[i]; // mirror at the screen border
             }
+            if (!InBounds(c, targetSize)) {
+                c = pixelCoord;
+            }
             cardinalCoord[i] = c;
             cardinalDepth[i] = FetchDepth(MapPixelToSample(c, frameParity));
-            sumRaw += cardinalDepth[i];
-            sumLin += LinearizeDepth(cardinalDepth[i]);
+            float raw = cardinalDepth[i];
+            float lin = LinearizeDepth(raw);
+            if (!isnan(raw) && !isinf(raw) && !isnan(lin) && !isinf(lin)) {
+                sumRaw += raw;
+                sumLin += lin;
+                validCount += 1.0f;
+            }
         }
-        currentDepth = sumRaw * 0.25f;
-        currentLinear = sumLin * 0.25f;
+        if (validCount > 0.0f) {
+            currentDepth = sumRaw / validCount;
+            currentLinear = sumLin / validCount;
+        } else {
+            currentDepth = (g_DepthMode == 1u) ? 0.0f : 1.0f;
+            currentLinear = 1000.0f;
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -238,11 +252,6 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID, uint3 groupThreadId : 
     bool historyUVBad = velocityBad || isinf(historyUV.x) || isnan(historyUV.x)
         || isinf(historyUV.y) || isnan(historyUV.y);
 
-    // Motion indicator (CHECKERBOARD.md: Utilizing Velocity).
-    // Stationary pixels (dot < 1e-8) pass through directly from current and previous checkerboard
-    // without variance clipping blur, preserving 100% native subpixel sharpness.
-    bool isMoving = dot(velocity, velocity) > 1e-8f;
-
     // -------------------------------------------------------------------------
     // 3. Disocclusion & depth delta test (scale-invariant: relative difference of LINEAR depth)
     // -------------------------------------------------------------------------
@@ -270,10 +279,10 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID, uint3 groupThreadId : 
     // -------------------------------------------------------------------------
     // 4. Neighbourhood statistics & variance clipping (anti-ghosting)
     // Uses ONLY natively shaded neighbours: samples that do not exist this frame must not enter the statistics.
-    // When stationary (isMoving == false), ghosting is physically impossible: variance clipping is bypassed
-    // to preserve pin-sharp subpixel details on static geometry and text (CHECKERBOARD.md).
+    // Clamping is active on both static and moving geometry: static geometry subject to dynamic lighting,
+    // shadows, or moving occluders still requires history bounding to prevent temporal ghosting.
     // -------------------------------------------------------------------------
-    if (!isDisoccluded && g_EnableColorClamping != 0u && isMoving) {
+    if (!isDisoccluded && g_EnableColorClamping != 0u) {
         float3 colorMin = float3(1e6f, 1e6f, 1e6f);
         float3 colorMax = float3(-1e6f, -1e6f, -1e6f);
         float3 m1 = float3(0.0f, 0.0f, 0.0f);
@@ -330,11 +339,10 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID, uint3 groupThreadId : 
     float spatialDepth = currentDepth; // depth estimate for reconstructed pixels (fallback path)
 
     if (isCurrentSampleActive) {
-        if (!isDisoccluded && historyColor.a > 0.0f && isMoving) {
-            // Blend with history for temporal stability on moving pixels
+        if (!isDisoccluded && historyColor.a > 0.0f) {
+            // Blend with history for temporal stability
             finalColor = lerp(currentColor, historyColor.rgb, g_HistoryWeight);
         } else {
-            // Static scene / newly revealed: 100% native current sample pass-through (CHECKERBOARD.md)
             finalColor = currentColor;
         }
     } else {
@@ -363,8 +371,8 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID, uint3 groupThreadId : 
                 finalColor = accumColor / accumWeight;
                 spatialDepth = accumDepth / accumWeight;
             } else {
-                finalColor = FetchColor(MapPixelToSample(cardinalCoord[0], frameParity));
-                spatialDepth = cardinalDepth[0];
+                finalColor = isCurrentSampleActive ? currentColor : FetchColor(MapPixelToSample(cardinalCoord[0], frameParity));
+                spatialDepth = isCurrentSampleActive ? currentDepth : cardinalDepth[0];
             }
         }
     }
@@ -407,6 +415,9 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID, uint3 groupThreadId : 
     float outDepth = currentDepth;
     if (!isCurrentSampleActive) {
         outDepth = isDisoccluded ? spatialDepth : previousDepth;
+    }
+    if (isnan(outDepth) || isinf(outDepth)) {
+        outDepth = (g_DepthMode == 1u) ? 0.0f : 1.0f;
     }
     g_OutputDepth[pixelCoord] = outDepth;
 }
