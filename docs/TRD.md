@@ -46,30 +46,65 @@ The architecture is composed of six modular subsystems:
 
 ## 2. API Interception & Hooking Strategy
 
+For comprehensive step-by-step guidance, refer to:
+* **Engineering Master Plan:** [nextImplementationPhase.md](file:///c:/Users/Dinesh%20B%20Pawar/OneDrive/Desktop/Checkerboard-Rendering/nextImplementationPhase.md)
+* **Vulkan Technical Guide:** [docs/VULKAN_HOOKING_GUIDE.md](file:///c:/Users/Dinesh%20B%20Pawar/OneDrive/Desktop/Checkerboard-Rendering/docs/VULKAN_HOOKING_GUIDE.md)
+
 ### 2.1 Vulkan Interception Architecture
-The mod intercepts the Vulkan loader through two primary mechanisms:
-1. **Dynamic DLL Hooking via MinHook:** Intercepts `vkGetInstanceProcAddr` and `vkGetDeviceProcAddr` exported by `vulkan-1.dll`.
+The mod intercepts the Vulkan runtime via `vulkan-1.dll` (located at `0x00007FFE66510000` in RDR2 build `1.0.1491.50`):
+1. **Dynamic DLL Hooking via MinHook:** Intercepts exported symbols from `vulkan-1.dll`:
+   - `vkQueuePresentKHR`: Coordinates frame lifecycle, tracking presentation intervals and frame index.
+   - `vkCreateSwapchainKHR` & `vkDestroySwapchainKHR`: Captures backbuffer resolution, format, and swapchain recreation events.
+   - `vkAcquireNextImageKHR`: Tracks the active presentation backbuffer index.
+   - `vkCmdSetViewport` & `vkCmdSetScissor`: Intercepts 4K geometry passes, downscaling them to 1080p 2× MSAA while keeping UI/HUD overlays at native 4K.
+   - `vkCmdBeginRenderPass` & `vkCmdEndRenderPass`: Detects scene geometry pass completion mid-frame to execute the SPIR-V reconstruction compute pass prior to post-processing and UI compositing.
+   - `vkCmdSetSampleLocationsEXT`: Toggles hardware subpixel sample locations on alternate frames when Strategy B is active.
 2. **Hook Table Interception:** Wraps the device dispatch table pointers:
    - `vkCreateDevice`
-   - `vkCreateSwapchainKHR`, `vkDestroySwapchainKHR`
-   - `vkQueuePresentKHR`
    - `vkCmdBeginRenderPass`, `vkCmdEndRenderPass`
    - `vkCmdDraw`, `vkCmdDrawIndexed`
    - `vkCreateImage`, `vkCreateSampler`
 
 ```cpp
-// Hook prototype for vkQueuePresentKHR
-VkResult VKAPI_CALL Hook_vkQueuePresentKHR(VkQueue queue, const VkPresentInfoKHR* pPresentInfo) {
-    CBREngine::Get().OnPrePresent(queue, pPresentInfo);
-    VkResult result = g_OriginalVkQueuePresentKHR(queue, pPresentInfo);
-    CBREngine::Get().OnPostPresent();
+// Hook prototype for vkQueuePresentKHR with safe fallback
+int Hooked_vkQueuePresentKHR(void* queue, const void* pPresentInfo) {
+    if (!g_Original_vkQueuePresentKHR) return -3; // VK_ERROR_INITIALIZATION_FAILED
+
+    try {
+        CBREngine::Get().OnPrePresent(queue, pPresentInfo);
+    } catch (...) {
+        // Exception suppression: never let C++ exceptions spill into RDR2 render thread
+    }
+
+    int result = g_Original_vkQueuePresentKHR(queue, pPresentInfo);
+
+    try {
+        CBREngine::Get().OnPostPresent(queue);
+    } catch (...) {}
+
     return result;
 }
 ```
 
-### 2.2 DirectX 12 Interception Architecture
+### 2.2 Sampling Strategy Differentiation
+To prevent destructive sample cancellation, the mod strictly isolates two mutually exclusive sampling mechanisms:
+1. **Strategy A (Viewport Shift Jitter):**
+   - Applies a ±0.5px horizontal subpixel jitter offset in `vkCmdSetViewport` on alternate frames.
+   - Works universally across all Vulkan drivers without requiring extension support.
+2. **Strategy B (Programmable Sample Locations):**
+   - Keeps the viewport stationary at integer pixel coordinates.
+   - Programmatically alters 2× MSAA sample positions using `vkCmdSetSampleLocationsEXT` (`VK_EXT_sample_locations`).
+   - Even frames: $(0.75, 0.75)$ and $(0.25, 0.25)$; Odd frames: $(0.25, 0.75)$ and $(0.75, 0.25)$.
+
+### 2.3 AOB Camera Pattern Scanner
+For automated camera projection matrix interception:
+- `pattern_scanner.cpp` performs IDA-style byte signature scanning with wildcards across the game executable memory space.
+- Resolves RIP-relative instruction offsets (`ResolveRipRelative`) to acquire camera projection matrices dynamically.
+- Protected by Structured Exception Handling (`__try` / `__except`) and `VirtualQuery` memory page bounds checking.
+
+### 2.4 DirectX 12 Interception Architecture
 On DX12, the mod hooks the VMT (Virtual Method Table) of:
-- `IDXGISwapChain3::Present` (VMT Index 8)
+- `IDXGISwapChain3::Present` (VMT Index 8, obtained via lightweight dummy device)
 - `ID3D12CommandQueue::ExecuteCommandLists`
 - `ID3D12Device::CreateCommittedResource`
 

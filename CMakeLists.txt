@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(RDR2_Checkerboard_Rendering VERSION 1.0.0 LANGUAGES CXX)
+project(RDR2_Checkerboard_Rendering VERSION 1.0.0 LANGUAGES C CXX)
 
 # Required for MSVC_RUNTIME_LIBRARY target property (static CRT below)
 cmake_policy(SET CMP0091 NEW)
@@ -22,9 +22,18 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CBR_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/include)
 set(CBR_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src)
 set(CBR_SHADER_DIR ${CMAKE_CURRENT_SOURCE_DIR}/shaders)
+set(MINHOOK_DIR ${CMAKE_CURRENT_SOURCE_DIR}/vendor/minhook)
+
+set(MINHOOK_SOURCES
+    ${MINHOOK_DIR}/src/buffer.c
+    ${MINHOOK_DIR}/src/hook.c
+    ${MINHOOK_DIR}/src/trampoline.c
+    ${MINHOOK_DIR}/src/hde/hde64.c
+)
 
 include_directories(
     ${CBR_INCLUDE_DIR}
+    ${MINHOOK_DIR}/include
 )
 
 # Header files
@@ -32,11 +41,13 @@ set(CBR_HEADERS
     ${CBR_INCLUDE_DIR}/cbr/cbr_engine.h
     ${CBR_INCLUDE_DIR}/cbr/checkerboard_mapping.h
     ${CBR_INCLUDE_DIR}/cbr/config.h
+    ${CBR_INCLUDE_DIR}/cbr/crash_handler.h
     ${CBR_INCLUDE_DIR}/cbr/depth_convention.h
     ${CBR_INCLUDE_DIR}/cbr/hooks.h
     ${CBR_INCLUDE_DIR}/cbr/jitter_manager.h
     ${CBR_INCLUDE_DIR}/cbr/limits.h
     ${CBR_INCLUDE_DIR}/cbr/logger.h
+    ${CBR_INCLUDE_DIR}/cbr/pattern_scanner.h
     ${CBR_INCLUDE_DIR}/cbr/reconstruction_pass.h
     ${CBR_INCLUDE_DIR}/cbr/render_target_manager.h
     ${CBR_INCLUDE_DIR}/cbr/ui_overlay.h
@@ -47,11 +58,13 @@ set(CBR_SOURCES
     ${CBR_SOURCE_DIR}/main.cpp
     ${CBR_SOURCE_DIR}/cbr_engine.cpp
     ${CBR_SOURCE_DIR}/config.cpp
+    ${CBR_SOURCE_DIR}/crash_handler.cpp
     ${CBR_SOURCE_DIR}/hooks.cpp
     ${CBR_SOURCE_DIR}/hooks_vulkan.cpp
     ${CBR_SOURCE_DIR}/hooks_dx12.cpp
     ${CBR_SOURCE_DIR}/jitter_manager.cpp
     ${CBR_SOURCE_DIR}/logger.cpp
+    ${CBR_SOURCE_DIR}/pattern_scanner.cpp
     ${CBR_SOURCE_DIR}/reconstruction_pass.cpp
     ${CBR_SOURCE_DIR}/render_target_manager.cpp
     ${CBR_SOURCE_DIR}/ui_overlay.cpp
@@ -69,7 +82,7 @@ set(CBR_SHADERS
 set_source_files_properties(${CBR_SHADERS} PROPERTIES HEADER_FILE_ONLY TRUE)
 
 # Define shared library (ASI plugin is a renamed DLL)
-add_library(rdr2-cbr SHARED ${CBR_HEADERS} ${CBR_SOURCES} ${CBR_SHADERS})
+add_library(rdr2-cbr SHARED ${CBR_HEADERS} ${CBR_SOURCES} ${CBR_SHADERS} ${MINHOOK_SOURCES})
 
 # Configure output extension as .asi for game loaders
 set_target_properties(rdr2-cbr PROPERTIES
@@ -161,7 +174,6 @@ if(CBR_DXC)
         COMMENT "Compiling cbr_reconstruct.hlsl to DXIL"
         VERBATIM)
     list(APPEND CBR_COMPILED_SHADERS ${CMAKE_CURRENT_BINARY_DIR}/shaders/$<CONFIG>/cbr_reconstruct.dxil)
-    list(APPEND CBR_COMPILED_SHADERS ${CMAKE_BINARY_DIR}/shaders/cbr_reconstruct.dxil)
 else()
     message(STATUS "dxc not found: DXIL shaders will not be built.")
 endif()
@@ -179,8 +191,10 @@ if(CBR_BUILD_TESTS)
     enable_testing()
     set(CBR_TEST_CORE_SOURCES
         ${CBR_SOURCE_DIR}/config.cpp
+        ${CBR_SOURCE_DIR}/crash_handler.cpp
         ${CBR_SOURCE_DIR}/logger.cpp
         ${CBR_SOURCE_DIR}/jitter_manager.cpp
+        ${CBR_SOURCE_DIR}/pattern_scanner.cpp
         ${CBR_SOURCE_DIR}/render_target_manager.cpp
         ${CBR_SOURCE_DIR}/reconstruction_pass.cpp
     )

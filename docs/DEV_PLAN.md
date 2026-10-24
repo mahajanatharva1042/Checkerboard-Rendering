@@ -36,26 +36,38 @@ The development roadmap is structured into 8 distinct phases designed to de-risk
   - Memory offset documentation sheet for RDR2 build 1436.28+.
   - RenderDoc frame capture analysis report.
 
-### Phase 1: Hooking Infrastructure & ASI Plugin Framework
+### Phase 1: Hooking Infrastructure & ASI Plugin Framework [✅ VERIFIED IN-GAME]
+- **Status:** **Completed & Validated in RDR2 build 1.0.1491.50** (See [Test Report](file:///c:/Users/Dinesh%20B%20Pawar/OneDrive/Desktop/Checkerboard-Rendering/docs/IN_GAME_TEST_REPORT_v1491.md))
 - **Duration:** 4 Weeks
-- **Objectives:**
-  - Build the ASI DLL entry point with `dinput8` loader compatibility.
-  - Implement MinHook wrapper for Vulkan loader functions (`vkGetInstanceProcAddr`, `vkGetDeviceProcAddr`).
-  - Implement DirectX 12 VMT hooking for `IDXGISwapChain3::Present` and command queues.
-  - Implement thread-safe diagnostic logger (`cbr.log`) and config parser (`cbr.ini`).
-  - Integrate Dear ImGui overlay hooked into the swapchain render pass.
-- **Deliverables:**
-  - Functional `rdr2-cbr.asi` loading into RDR2, logging draw calls, and rendering ImGui overlay without crashing.
+- **Objectives Accomplished:**
+  - Built ASI entry point (`rdr2-cbr.asi`) with Alexander Blade `dinput8` and LML compatibility.
+  - Implemented module pinning to prevent loader lock unloading crashes.
+  - Implemented thread-safe diagnostic logger (`cbr.log`) and configuration parser (`cbr.ini`).
+  - Added full crash handler with automated minidump generation (`cbr_crash_*.dmp`).
+  - Validated 2× MSAA quarter-resolution memory allocation footprint (300.59 MiB at 4K).
+  - Verified graceful fallback protection (mod times out quietly after 60s without crashing host).
 
-### Phase 2: Render Target Interception & Memory Management
+### Phase 2: Active Graphics Detours & Render Target Interception [✅ COMPLETED]
+- **Status:** **Completed & CI Verified** (See [Next Implementation Phase Plan](file:///c:/Users/Dinesh%20B%20Pawar/OneDrive/Desktop/Checkerboard-Rendering/nextImplementationPhase.md) and [Vulkan Hooking Guide](file:///c:/Users/Dinesh%20B%20Pawar/OneDrive/Desktop/Checkerboard-Rendering/docs/VULKAN_HOOKING_GUIDE.md))
 - **Duration:** 3 Weeks
-- **Objectives:**
-  - Intercept creation of full-resolution color and depth buffers in Vulkan/D3D12.
-  - Allocate quarter-resolution 2× MSAA intermediate targets.
-  - Implement custom device-local VRAM sub-allocator for ping-pong history textures.
-  - Verify memory footprint remains strictly under 300 MB.
+- **Objectives Accomplished:**
+  - Transitioned from stubs to active MinHook detours on `vulkan-1.dll` (`vkQueuePresentKHR`, `vkCreateSwapchainKHR`, `vkCmdSetViewport`, `vkCmdSetScissor`, `vkCmdBeginRenderPass`, `vkCmdEndRenderPass`, `vkCmdSetSampleLocationsEXT`).
+  - Captured swapchain backbuffers and wired real `VkDevice` into `ReconstructionPass`.
+  - Implemented dynamic viewport/scissor downscaling: redirects 4K scene passes to 1080p 2× MSAA while keeping UI/HUD overlays at native 4K.
+  - Implemented mid-frame scene pass interception on `vkCmdEndRenderPass` to trigger compute reconstruction before post-processing and UI compositing.
+  - Implemented Strategy A (0.5px horizontal viewport jitter) and Strategy B (`VK_EXT_sample_locations` alternation with stationary viewport) with strict mutual exclusivity.
+  - Authored IDA-style AOB camera pattern scanner (`pattern_scanner.cpp`) with RIP-relative address resolution and SEH memory protection fallback.
+  - Built internal Vulkan descriptor pool, descriptor sets (bindings 0–6), and `vkCmdPipelineBarrier` synchronization.
 - **Deliverables:**
-  - Active render target redirection layer verified in RenderDoc.
+  - Active Vulkan graphics detours, complete compute pipeline dispatch, and automated CI release packaging (`rdr2-cbr-release.zip`).
+
+### Phase 2.6 & Phase 3: Telemetry, In-Game Overlay & DirectX 12 Parity [🔄 ACTIVE FOCUS]
+- **Status:** **In Progress**
+- **Duration:** 2 Weeks
+- **Objectives:**
+  - Complete interactive Dear ImGui overlay integration (F11/Insert toggle) for real-time telemetry, frame time metrics, and debug visualization modes.
+  - Implement DirectX 12 hooking parity via dummy device swapchain VMT method (`IDXGISwapChain3::Present` VMT index 8).
+  - Execute HLSL compute shader (`cbr_reconstruct.hlsl`) on DX12 command queue.
 
 ### Phase 3: Projection Jitter & Quarter-Resolution Rendering
 - **Duration:** 2 Weeks

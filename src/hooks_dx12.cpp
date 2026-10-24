@@ -44,7 +44,10 @@ bool HookManager::InstallDX12Hooks() {
     HMODULE dxgiModule  = GetModuleHandleA("dxgi.dll");
 
     if (!d3d12Module || !dxgiModule) {
-        CBR_LOG_WARN("d3d12.dll or dxgi.dll not yet loaded. Deferring DX12 hooks.");
+        static std::atomic<bool> s_warnedMissing{ false };
+        if (!s_warnedMissing.exchange(true)) {
+            CBR_LOG_WARN("d3d12.dll or dxgi.dll not yet loaded. Deferring DX12 hooks.");
+        }
         return false;
     }
 
@@ -59,9 +62,9 @@ bool HookManager::InstallDX12Hooks() {
 }
 
 void HookManager::UninstallDX12Hooks() {
-    if (m_dx12Hooked) {
+    if (m_dx12Hooked.load()) {
         CBR_LOG_INFO("Restoring original DXGI/DX12 VMT hooks.");
-        m_dx12Hooked = false;
+        m_dx12Hooked.store(false);
     }
 }
 
